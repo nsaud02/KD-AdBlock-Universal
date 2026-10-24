@@ -1,38 +1,42 @@
 #import <Foundation/Foundation.h>
+#import <mach-o/dyld.h>
+#import <dispatch/dispatch.h>
 #import <objc/runtime.h>
-#import <objc/message.h>
+#include <string.h>
 
-// KD AdBlock V1: opt-in compatibility hooks for known full-screen ad presenters.
-// This does not hook general UIKit presentation, avoiding disruption of login/search.
-static void KDNoOp(id self, SEL _cmd) { (void)self; (void)_cmd; }
-static void KDNoOpWithController(id self, SEL _cmd, id controller) { (void)self; (void)_cmd; (void)controller; }
-
-typedef struct { const char *className; const char *selectorName; BOOL takesController; } KDHook;
-static const KDHook hooks[] = {
-    {"GADInterstitialAd", "presentFromRootViewController:", YES},
-    {"GADAppOpenAd", "presentFromRootViewController:", YES},
-    {"GADRewardedInterstitialAd", "presentFromRootViewController:", YES},
-    {"MAInterstitialAd", "showAd", NO},
-    {"ISInterstitialAd", "show", NO},
+// Diagnostic-only V2: detects known advertising SDKs, never changes app behavior.
+static const char * const markers[] = {
+    "FBAudienceNetwork", "InMobiSDK", "GoogleMobileAds", "AppLovinSDK",
+    "IronSource", "UnityAds", "Vungle", "Pangle", "Mintegral", "DTExchange"
 };
 
-static void KDInstallHooks(void) {
-    for (size_t i = 0; i < sizeof(hooks)/sizeof(hooks[0]); i++) {
-        Class cls = objc_getClass(hooks[i].className);
-        if (!cls) continue;
-        SEL sel = sel_registerName(hooks[i].selectorName);
-        Method method = class_getInstanceMethod(cls, sel);
-        if (!method) continue;
-        unsigned int expected = hooks[i].takesController ? 3 : 2;
-        if (method_getNumberOfArguments(method) != expected) continue;
-        IMP replacement = hooks[i].takesController ? (IMP)KDNoOpWithController : (IMP)KDNoOp;
-        method_setImplementation(method, replacement);
+static void KDScan(void) {
+    @autoreleasepool {
+        NSMutableSet<NSString *> *found = [NSMutableSet set];
+        uint32_t count = _dyld_image_count();
+        for (uint32_t i = 0; i < count; i++) {
+            const char *path = _dyld_get_image_name(i);
+            if (!path) continue;
+            for (size_t j = 0; j < sizeof(markers)/sizeof(markers[0]); j++) {
+                if (strstr(path, markers[j])) [found addObject:@(markers[j])];
+            }
+        }
+        // Classes may be linked into the executable rather than separate images.
+        if (objc_getClass("GADInterstitialAd") || objc_getClass("GADBannerView"))
+            [found addObject:@"GoogleMobileAds (class)"];
+        if (objc_getClass("MAInterstitialAd")) [found addObject:@"AppLovin (class)"];
+        NSLog(@"[KDAdBlock V2] loaded=YES; detected=%@", [[found allObjects] sortedArrayUsingSelector:@selector(compare:)]);
     }
 }
 
+static void KDImageAdded(const struct mach_header *header, intptr_t slide) {
+    (void)header; (void)slide;
+    // dyld callbacks may run under loader locks: defer runtime inspection.
+    dispatch_async(dispatch_get_main_queue(), ^{ KDScan(); });
+}
+
 __attribute__((constructor)) static void KDStart(void) {
-    @autoreleasepool {
-        // Some SDK classes load later. This V1 only hooks classes present at startup.
-        KDInstallHooks();
-    }
+    NSLog(@"[KDAdBlock V2] constructor invoked");
+    _dyld_register_func_for_add_image(KDImageAdded);
+    dispatch_async(dispatch_get_main_queue(), ^{ KDScan(); });
 }
