@@ -1,0 +1,53 @@
+
+name: Build KD AdBlock Dylib
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Install Theos
+        run: |
+          brew install ldid
+          git clone --recursive \
+            https://github.com/theos/theos.git \
+            "$HOME/theos"
+          echo "THEOS=$HOME/theos" >> "$GITHUB_ENV"
+
+      - name: Download iOS SDK
+        run: |
+          git clone --depth 1 \
+            https://github.com/theos/sdks.git \
+            /tmp/theos-sdks
+          mkdir -p "$HOME/theos/sdks"
+          cp -R /tmp/theos-sdks/*.sdk \
+            "$HOME/theos/sdks/"
+
+      - name: Build library
+        run: |
+          make clean
+          make FINALPACKAGE=1 \
+            ARCHS=arm64 \
+            DEBUG=0
+
+      - name: Locate dylib
+        run: |
+          find .theos -type f -name "*.dylib"
+          mkdir -p output
+          find .theos -type f \
+            -name "KDAdBlock.dylib" \
+            -exec cp {} output/ \;
+          test -f output/KDAdBlock.dylib
+
+      - name: Upload dylib
+        uses: actions/upload-artifact@v4
+        with:
+          name: KDAdBlock-Dylib
+          path: output/KDAdBlock.dylib
