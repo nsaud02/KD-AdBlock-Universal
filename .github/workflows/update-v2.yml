@@ -1,0 +1,86 @@
+
+name: Update KD AdBlock V2
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Extract V2 source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ZIP="KD-AdBlock-Universal-V2-Diagnostic.zip"
+
+          if [ ! -f "$ZIP" ]; then
+            echo "::error::V2 ZIP not found"
+            exit 1
+          fi
+
+          mkdir -p /tmp/kd-v2
+          unzip -q "$ZIP" -d /tmp/kd-v2
+
+          SOURCE="$(find /tmp/kd-v2 -type f \
+            -name KDAdBlock.m -print -quit)"
+
+          if [ -z "$SOURCE" ]; then
+            echo "::error::KDAdBlock.m not found"
+            exit 1
+          fi
+
+          SOURCE="$(dirname "$SOURCE")"
+
+          test -f "$SOURCE/Makefile"
+          test -f "$SOURCE/README.md"
+
+          cp "$SOURCE/KDAdBlock.m" .
+          cp "$SOURCE/Makefile" .
+          cp "$SOURCE/README.md" .
+
+          if [ -f "$SOURCE/.github/workflows/build.yml" ]; then
+            mkdir -p .github/workflows
+            cp "$SOURCE/.github/workflows/build.yml" \
+              .github/workflows/build.yml
+          fi
+
+      - name: Verify source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          test -s KDAdBlock.m
+          test -s Makefile
+          test -s README.md
+
+          echo "KD AdBlock V2 files ready"
+
+      - name: Commit V2 source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git config user.name "github-actions[bot]"
+          git config user.email \
+            "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add KDAdBlock.m Makefile README.md
+          git add .github/workflows/build.yml 2>/dev/null || true
+
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+            exit 0
+          fi
+
+          git commit -m "Update KD AdBlock to V2"
+          git push
